@@ -37,7 +37,7 @@ class CustomAttention(nn.Module):
 
 
         self.dropout = nn.Dropout(dropout)
-        self.projection = nn.Linear(2 * d_model, d_model)  # Adjusted for concatenated output
+        self.projection = nn.Linear(d_model, d_model)  # Adjusted for concatenated output
         self._init_weight()
 
     def forward(self, Q, K, V):
@@ -80,7 +80,7 @@ class CustomAttention(nn.Module):
         print(attn.shape, V.shape)
         # attn_output = attn_output.permute(2, 0, 1, 3).reshape(-1, bs, self.d_model)
         print(attn_output.shape)
-        combined_output = torch.cat([attn_output, V], dim=-1)
+        combined_output = attn_output + V
 
         # Final projection
         return self.projection(combined_output), attn_dropout
