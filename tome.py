@@ -1,5 +1,7 @@
 import torch
 import math
+import torch
+import math
 from typing import Tuple, Callable
 
 def bipartite_soft_matching(
@@ -55,11 +57,13 @@ def bipartite_soft_matching(
             unm_idx = unm_idx.sort(dim=1)[0]
 
     def merge(x: torch.Tensor, mode="mean") -> torch.Tensor:
+        # with torch.no_grad():
         src, dst = x[..., ::2, :], x[..., 1::2, :]
         n, t1, c = src.shape
         unm = src.gather(dim=-2, index=unm_idx.expand(n, t1 - r, c))
         src = src.gather(dim=-2, index=src_idx.expand(n, r, c))
-        dst = dst.scatter_(-2, dst_idx.expand(n, r, c), src, reduce=mode)
+        # altered to avoid no grad
+        dst = torch.scatter_add(dst, -2, dst_idx.expand(n, r, c), src)
 
         if distill_token:
             return torch.cat([unm[:, :1], dst[:, :1], unm[:, 1:], dst[:, 1:]], dim=1)
@@ -67,6 +71,8 @@ def bipartite_soft_matching(
             return torch.cat([unm, dst], dim=1)
 
     def unmerge(x: torch.Tensor) -> torch.Tensor:
+        # i think we really do want gradient to pass back
+        # with torch.no_grad():
         unm_len = unm_idx.shape[1]
         unm, dst = x[..., :unm_len, :], x[..., unm_len:, :]
         n, _, c = unm.shape
@@ -98,3 +104,52 @@ def apply_merge(x, merge, size=None,  mode="add"):
 
     x = x / size
     return x
+
+
+
+def make_tome_block(block_class):
+    class ToMeBlock(block_class):
+        print("TomeBlock")
+        
+        def forward(self, Q, K, V):
+            # check input sizes
+            # if input size 3: permute to b s d -> merge tokens -> call forward -> unmerge -> undo permute to s, b, d
+            # if input size 4: boolean that its size 4
+            # gonna be much harder to merge the tokens for the [4, 245, 30, 30]
+            # save h, w --> reshape to b c h w -> b c (hw)
+            # permute to [hw, hw, c] 
+            # merge tokens
+            # unmerge, undo permute, undo reshapes
+            print("In tome block", Q.shape)
+            if len(Q.shape) == 3:
+                Q, K, V = Q.permute(1, 0, 2), K.permute(1, 0, 2), V.permute(1, 0, 2)  # Permute to S, B, D
+                merge_q, unmerge_q = bipartite_soft_matching(Q, Q.shape[1]//2)
+                Q = apply_merge(Q, merge_q)
+                
+                merge_k, unmerge_k = bipartite_soft_matching(K, K.shape[1]//2)
+                K = apply_merge(K, merge_k)
+                
+                merge_v, unmerge_v = bipartite_soft_matching(V, V.shape[1]//2)
+                V = apply_merge(V, merge_v)
+
+                Q, K, V = Q.permute(1, 0, 2), K.permute(1, 0, 2), V.permute(1, 0, 2)  # Permute to S, B, D
+
+                output, dropout = super().forward(Q, K, V)  # Call the forward method of the superclass
+
+                # unmerge all of them, or one after another, or just via Q
+                output = output.permute(1, 0, 2)
+                output = unmerge_q(output)
+                output= output.permute(1, 0, 2)
+
+                return output, dropout
+            
+    return ToMeBlock
+            
+def make_tome(model):
+    for module in model.modules():
+        if "MultiheadAttention" == module.__class__.__name__:
+            print("Called")
+            module.__class__ = make_tome_block(module.__class__)
+            module.__class__.__name__ = "ToMeAttention"
+    return model
+    
