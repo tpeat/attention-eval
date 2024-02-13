@@ -31,7 +31,7 @@ class PatchEmbed(nn.Module):
             embed_dim=768,
             norm_layer=None,
             flatten=True,
-            bias=True,
+            bias=1,
     ):
         super().__init__()
         img_size = to_2tuple(img_size)
@@ -102,8 +102,8 @@ class Mlp(nn.Module):
             use_conv=False,
     ):
         super().__init__()
-        out_features = out_features or in_features * 2
-        hidden_features = hidden_features or in_features * 2
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
         bias = to_2tuple(bias)
         drop_probs = to_2tuple(drop)
         linear_layer = partial(nn.Conv2d, kernel_size=1) if use_conv else nn.Linear
